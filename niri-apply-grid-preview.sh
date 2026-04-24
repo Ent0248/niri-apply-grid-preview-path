@@ -17,7 +17,7 @@ sed -i '/fn compute_view_pos(&self) -> f64 {/,/^    }/c\
         0.0\
     }' src/ui/mru.rs
 
-
+# 网格预览
 sed -i '/fn thumbnails(&self) -> impl Iterator/,/^    }/c\
     fn thumbnails(&self) -> impl Iterator<Item = (&Thumbnail, Rectangle<f64, Logical>)> {\
         let thumbnails: Vec<_> = self.wmru.thumbnails().collect();\
@@ -43,70 +43,140 @@ sed -i '/fn thumbnails(&self) -> impl Iterator/,/^    }/c\
             .map(|t| t.preview_size(output_size, scale))\
             .collect();\
 \
-        let mut best_layout: Option<(usize, usize, f64, f64, f64, f64)> = None;\
-        let mut best_aspect_diff = f64::MAX;\
+        let try_layout = |height_scale: f64| -> Option<(Vec<Vec<usize>>, Vec<Size<f64, Logical>>, f64, f64)> {\
+            let max_single_height = max_height.min(300.0); // 单个窗口最大高度限制\
+            let current_height = (original_sizes[0].h * height_scale).min(max_single_height);\
 \
-        for cols in 1..=count.min(6) {\
-            let rows = (count + cols - 1) / cols;\
-            let cell_width_by_width = (max_width - (cols - 1) as f64 * gap) / cols as f64;\
-            let cell_height_by_height = (max_height - (rows - 1) as f64 * gap) / rows as f64;\
-            let cell_size = cell_width_by_width.min(cell_height_by_height);\
-            let cell_width = cell_size;\
-            let cell_height = cell_size;\
-            let total_width = cols as f64 * cell_width + (cols - 1) as f64 * gap;\
-            let total_height = rows as f64 * cell_height + (rows - 1) as f64 * gap;\
+            let mut scaled_sizes: Vec<Size<f64, Logical>> = original_sizes\
+                .iter()\
+                .map(|orig| {\
+                    let scale_factor = current_height / orig.h;\
+                    Size::new(orig.w * scale_factor, current_height)\
+                })\
+                .collect();\
 \
-            if total_width > max_width + 1e-6 || total_height > max_height + 1e-6 {\
-                continue;\
+            let mut rows: Vec<Vec<usize>> = Vec::new();\
+            let mut current_row = Vec::new();\
+            let mut current_row_width = 0.0;\
+\
+            for i in 0..count {\
+                let item_width = scaled_sizes[i].w;\
+\
+                if current_row.is_empty() {\
+                    current_row.push(i);\
+                    current_row_width = item_width;\
+                } else if current_row_width + gap + item_width <= max_width {\
+                    current_row.push(i);\
+                    current_row_width += gap + item_width;\
+                } else {\
+                    rows.push(current_row);\
+                    current_row = vec![i];\
+                    current_row_width = item_width;\
+                }\
             }\
 \
-            let aspect = total_width / total_height;\
-            let screen_aspect = max_width / max_height;\
-            let diff = (aspect - screen_aspect).abs();\
+            if !current_row.is_empty() {\
+                rows.push(current_row);\
+            }\
 \
-            if diff < best_aspect_diff {\
-                best_aspect_diff = diff;\
-                best_layout = Some((cols, rows, cell_width, cell_height, total_width, total_height));\
+            let total_height = rows.len() as f64 * current_height + (rows.len() - 1) as f64 * gap;\
+\
+            if total_height <= max_height + 1e-6 {\
+                Some((rows, scaled_sizes, total_height, current_height))\
+            } else {\
+                None\
+            }\
+        };\
+\
+        let mut best_layout: Option<(Vec<Vec<usize>>, Vec<Size<f64, Logical>>, f64, f64)> = None;\
+\
+        for percent in (20..=100).rev() {\
+            let scale_factor = percent as f64 / 100.0;\
+            if let Some(layout) = try_layout(scale_factor) {\
+                best_layout = Some(layout);\
+                break;\
             }\
         }\
 \
-        let (cols, rows, cell_width, cell_height, total_width, total_height) = best_layout.unwrap_or_else(|| {\
-            let cols = count.min(6);\
-            let rows = (count + cols - 1) / cols;\
-            let cell_width = (max_width - (cols - 1) as f64 * gap) / cols as f64;\
-            let cell_height = (max_height - (rows - 1) as f64 * gap) / rows as f64;\
-            let total_width = cols as f64 * cell_width + (cols - 1) as f64 * gap;\
-            let total_height = rows as f64 * cell_height + (rows - 1) as f64 * gap;\
-            (cols, rows, cell_width, cell_height, total_width, total_height)\
+        if best_layout.is_none() {\
+            for percent in (10..20).rev() {\
+                let scale_factor = percent as f64 / 100.0;\
+                if let Some(layout) = try_layout(scale_factor) {\
+                    best_layout = Some(layout);\
+                    break;\
+                }\
+            }\
+        }\
+\
+        let (rows, scaled_sizes, total_height, row_height) = best_layout.unwrap_or_else(|| {\
+            let min_height = 50.0;\
+            let mut scaled_sizes: Vec<Size<f64, Logical>> = original_sizes\
+                .iter()\
+                .map(|orig| {\
+                    let scale_factor = min_height / orig.h;\
+                    Size::new(orig.w * scale_factor, min_height)\
+                })\
+                .collect();\
+\
+            let mut rows: Vec<Vec<usize>> = Vec::new();\
+            let mut current_row = Vec::new();\
+            let mut current_row_width = 0.0;\
+\
+            for i in 0..count {\
+                let item_width = scaled_sizes[i].w;\
+\
+                if current_row.is_empty() {\
+                    current_row.push(i);\
+                    current_row_width = item_width;\
+                } else if current_row_width + gap + item_width <= max_width {\
+                    current_row.push(i);\
+                    current_row_width += gap + item_width;\
+                } else {\
+                    rows.push(current_row);\
+                    current_row = vec![i];\
+                    current_row_width = item_width;\
+                }\
+            }\
+\
+            if !current_row.is_empty() {\
+                rows.push(current_row);\
+            }\
+\
+            let total_height = rows.len() as f64 * min_height + (rows.len() - 1) as f64 * gap;\
+            (rows, scaled_sizes, total_height, min_height)\
         });\
 \
-        let mut preview_sizes = Vec::with_capacity(count);\
-        for i in 0..count {\
-            let orig = original_sizes[i];\
-            let scale = (cell_width / orig.w).min(cell_height / orig.h);\
-            let width = orig.w * scale;\
-            let height = orig.h * scale;\
-            preview_sizes.push(Size::from((width, height)));\
-        }\
+        let row_count = rows.len();\
+        let row_heights = vec![row_height; row_count];\
 \
-        let start_x = (output_size.w - total_width) / 2.0;\
         let start_y = (output_size.h - total_height) / 2.0;\
 \
-        let result: Vec<_> = (0..count)\
-            .map(|i| {\
-                let row = i / cols;\
-                let col = i % cols;\
-                let size = preview_sizes[i];\
-                let cell_x = start_x + col as f64 * (cell_width + gap);\
-                let cell_y = start_y + row as f64 * (cell_height + gap);\
-                let x_offset = (cell_width - size.w) / 2.0;\
-                let y_offset = (cell_height - size.h) / 2.0;\
-                let final_x = cell_x + x_offset;\
-                let final_y = cell_y + y_offset;\
-                let loc = Point::new(round(final_x), round(final_y));\
-                (thumbnails[i], Rectangle::new(loc, size))\
-            })\
-            .collect();\
+        let mut y_offsets = vec![0.0_f64; row_count];\
+        for row in 0..row_count {\
+            y_offsets[row] = start_y + row_heights[0..row].iter().sum::<f64>() + row as f64 * gap;\
+        }\
+\
+        let mut result = Vec::with_capacity(count);\
+\
+        for (row_idx, row_indices) in rows.iter().enumerate() {\
+            let row_total_width: f64 = row_indices\
+                .iter()\
+                .map(|&idx| scaled_sizes[idx].w)\
+                .sum::<f64>()\
+                + (row_indices.len() - 1) as f64 * gap;\
+\
+            let start_x = (output_size.w - row_total_width) / 2.0;\
+\
+            let mut x_offset = start_x;\
+            for &idx in row_indices {\
+                let size = scaled_sizes[idx];\
+                let loc = Point::new(round(x_offset), round(y_offsets[row_idx]));\
+                result.push((thumbnails[idx], Rectangle::new(loc, size)));\
+                x_offset += size.w + gap;\
+            }\
+        }\
 \
         result.into_iter()\
     }' src/ui/mru.rs
+
+
